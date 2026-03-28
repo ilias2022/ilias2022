@@ -73,7 +73,8 @@ namespace :backtest do
         correct += 1 if pred.predicted_winner == match.winner
         total   += 1
       end
-      puts "%-8s %-10s #{total > 0 ? (correct.to_f / total * 100).round(1) : 0}%" % [s, "#{correct}/#{total}"]
+      acc = total > 0 ? (correct.to_f / total * 100).round(1) : 0
+      puts "%-8s %-10s %s" % [s, "#{correct}/#{total}", "#{acc}%"]
     end
   end
 end

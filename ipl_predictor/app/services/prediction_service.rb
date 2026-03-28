@@ -1,24 +1,25 @@
-# Predicts win probabilities using a weighted combination of six factors:
+# Predicts win probabilities using a weighted combination of eight factors:
 #
 #   Factor              Weight  Description
 #   ──────────────────────────────────────────────────────────────────────
-#   win_rate              0.15  Overall career win rate
-#   head_to_head          0.20  H2H record between these two teams
-#   recent_form           0.20  Last 10 matches (exponentially weighted)
-#   venue_win_rate        0.25  Team's actual record at this specific venue
-#   toss_advantage        0.10  Does toss winner tend to win at this venue?
-#   season_form           0.10  Current-season form (live, updates each match)
+#   batting_strength      0.20  Rolling avg runs scored vs league avg (last 10)
+#   bowling_strength      0.20  Rolling avg runs conceded vs league avg (last 10)
+#   venue_win_rate        0.20  Team's win rate at this specific venue
+#   head_to_head          0.15  H2H record between these two teams
+#   recent_form           0.10  Last 10 results, exponentially weighted
+#   season_form           0.08  Current-season win rate
+#   toss_advantage        0.07  Toss-to-win correlation at venue (if toss known)
 #
-# With the full Kaggle dataset (~900 matches), realistic accuracy: 58–63%.
-# Getting to 70%+ requires player-level form data (deliveries.csv).
+# Falls back gracefully to any subset of features when data is missing.
 class PredictionService
   WEIGHTS = {
-    win_rate:       0.15,
-    head_to_head:   0.20,
-    recent_form:    0.20,
-    venue_win_rate: 0.25,
-    toss_advantage: 0.10,
-    season_form:    0.10,
+    batting_strength: 0.20,
+    bowling_strength: 0.20,
+    venue_win_rate:   0.20,
+    head_to_head:     0.15,
+    recent_form:      0.10,
+    season_form:      0.08,
+    toss_advantage:   0.07,
   }.freeze
 
   # before_date: for backtesting — only uses data before this date
@@ -82,22 +83,57 @@ class PredictionService
 
   def compute_factors(team)
     {
-      win_rate:       overall_win_rate(team),
-      head_to_head:   h2h_score(team),
-      recent_form:    recent_form_score(team),
-      venue_win_rate: venue_win_rate(team),
-      toss_advantage: toss_advantage_score(team),
-      season_form:    season_form_score(team),
+      batting_strength: batting_strength(team),
+      bowling_strength: bowling_strength(team),
+      venue_win_rate:   venue_win_rate(team),
+      head_to_head:     h2h_score(team),
+      recent_form:      recent_form_score(team),
+      season_form:      season_form_score(team),
+      toss_advantage:   toss_advantage_score(team),
     }
   end
 
-  # ─── Factor computations ────────────────────────────────────────────────
+  # ─── Strength features (from deliveries data) ───────────────────────────
 
-  def overall_win_rate(team)
-    played = history.where("team1_id = ? OR team2_id = ?", team.id, team.id).count
-    return 0.5 if played.zero?
-    history.where(winner: team).count.to_f / played
+  # How does this team's average runs scored compare to the league average?
+  # Returns a 0–1 score where 0.5 = league average.
+  def batting_strength(team)
+    avg = MatchScore.batting_avg(team, before_date: @before_date)
+    return 0.5 unless avg
+
+    league = league_batting_avg
+    return 0.5 if league.zero?
+
+    # Sigmoid-style normalization: ratio capped to 0.2–0.8 range
+    ratio = avg / league
+    normalized = (ratio - 0.85) / 0.30  # shift so 1.0 ratio → 0.5
+    normalized.clamp(0.1, 0.9)
   end
+
+  # How good is this team's bowling? Lower runs conceded = higher score.
+  def bowling_strength(team)
+    avg_conceded = MatchScore.bowling_avg(team, before_date: @before_date)
+    return 0.5 unless avg_conceded
+
+    league = league_batting_avg
+    return 0.5 if league.zero?
+
+    # Invert: conceding fewer runs than average is better
+    ratio = avg_conceded / league
+    normalized = (1.15 - ratio) / 0.30
+    normalized.clamp(0.1, 0.9)
+  end
+
+  def league_batting_avg
+    @league_batting_avg ||= begin
+      scope = MatchScore.joins(:match)
+      scope = scope.where("matches.match_date < ?", @before_date) if @before_date
+      avg   = scope.average(:runs_scored)
+      avg&.to_f || 165.0  # IPL historical average ~165 runs/innings
+    end
+  end
+
+  # ─── Match-level features ────────────────────────────────────────────────
 
   def h2h_score(team)
     other = opponent(team)
@@ -109,7 +145,6 @@ class PredictionService
     h2h.where(winner: team).count.to_f / h2h.count
   end
 
-  # Exponentially weighted recent form — most recent match has highest weight
   def recent_form_score(team)
     recent = history
                .where("team1_id = ? OR team2_id = ?", team.id, team.id)
@@ -121,14 +156,13 @@ class PredictionService
     total_weight  = 0.0
     weighted_wins = 0.0
     recent.each_with_index do |m, i|
-      w             = n - i  # most recent = n, oldest = 1
+      w             = n - i
       total_weight  += w
       weighted_wins += w if m.winner_id == team.id
     end
     weighted_wins / total_weight
   end
 
-  # Team's actual win rate at this specific venue
   def venue_win_rate(team)
     return 0.5 if @venue.blank?
     vm = venue_matches.where("team1_id = ? OR team2_id = ?", team.id, team.id)
@@ -136,14 +170,12 @@ class PredictionService
     vm.where(winner: team).count.to_f / vm.count
   end
 
-  # If toss winner known: use venue toss-to-win rate; otherwise neutral
   def toss_advantage_score(team)
     return 0.5 if @toss_winner.nil?
     rate = toss_to_win_rate
     @toss_winner == team ? rate : (1.0 - rate)
   end
 
-  # Fraction of matches at this venue won by the toss winner
   def toss_to_win_rate
     @toss_to_win_rate ||= begin
       return 0.5 if @venue.blank?
@@ -153,7 +185,6 @@ class PredictionService
     end
   end
 
-  # Win rate in the most recent completed season
   def season_form_score(team)
     current = history.maximum(:season)
     return 0.5 unless current
@@ -181,7 +212,6 @@ class PredictionService
     @venue_matches ||= history.where("venue LIKE ?", "%#{venue_keyword}%")
   end
 
-  # Pick the most distinctive word from the venue name for fuzzy matching
   def venue_keyword
     @venue_keyword ||= begin
       stopwords = %w[cricket stadium ground international]

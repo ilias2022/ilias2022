@@ -10,9 +10,21 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_03_28_080634) do
+ActiveRecord::Schema[8.1].define(version: 2026_03_28_092653) do
+  create_table "match_scores", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.integer "match_id", null: false
+    t.integer "runs_scored"
+    t.integer "team_id", null: false
+    t.datetime "updated_at", null: false
+    t.integer "wickets_lost"
+    t.index ["match_id"], name: "index_match_scores_on_match_id"
+    t.index ["team_id"], name: "index_match_scores_on_team_id"
+  end
+
   create_table "matches", force: :cascade do |t|
     t.datetime "created_at", null: false
+    t.integer "kaggle_match_id"
     t.date "match_date"
     t.integer "season"
     t.integer "team1_id", null: false
@@ -22,6 +34,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_28_080634) do
     t.datetime "updated_at", null: false
     t.string "venue"
     t.integer "winner_id"
+    t.index ["kaggle_match_id"], name: "index_matches_on_kaggle_match_id"
     t.index ["team1_id"], name: "index_matches_on_team1_id"
     t.index ["team2_id"], name: "index_matches_on_team2_id"
     t.index ["toss_winner_id"], name: "index_matches_on_toss_winner_id"
@@ -51,6 +64,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_28_080634) do
     t.datetime "updated_at", null: false
   end
 
+  add_foreign_key "match_scores", "matches"
+  add_foreign_key "match_scores", "teams"
   add_foreign_key "matches", "teams", column: "team1_id"
   add_foreign_key "matches", "teams", column: "team2_id"
   add_foreign_key "matches", "teams", column: "toss_winner_id"
