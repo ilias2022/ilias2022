@@ -1,32 +1,45 @@
-<h1>Match Prediction</h1>
+<%# ── PLAY / SKIP banner ─────────────────────────────────────────── %>
+<% conf_pct = (@prediction.confidence * 100).round(1) %>
+<div style="text-align: center; padding: 24px; border-radius: 12px; margin-bottom: 24px;
+            background: <%= @play ? '#0d2b0d' : '#2b0d0d' %>;
+            border: 2px solid <%= @play ? '#22c55e' : '#ef4444' %>;">
+  <div style="font-size: 52px; font-weight: 900; color: <%= @play ? '#22c55e' : '#ef4444' %>; letter-spacing: 4px;">
+    <%= @play ? "PLAY" : "SKIP" %>
+  </div>
+  <div style="color: <%= @play ? '#86efac' : '#fca5a5' %>; margin-top: 4px; font-size: 16px;">
+    <% if @play %>
+      Model confidence <%= conf_pct %>% — above the 60% threshold
+      <% if @xi_provided %>· XI data included<% end %>
+    <% else %>
+      Model confidence <%= conf_pct %>% — below the 60% threshold, edge not strong enough
+    <% end %>
+  </div>
+</div>
 
+<%# ── Probability display ────────────────────────────────────────── %>
 <div class="card">
   <div style="display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; margin-bottom: 24px;">
     <div style="text-align: center;">
-      <div style="font-size: 22px; font-weight: 800; color: <%= @prediction.predicted_winner == @prediction.team1 ? '#f97316' : '#a0a0c0' %>">
+      <div style="font-size: 20px; font-weight: 800; color: <%= @prediction.predicted_winner == @prediction.team1 ? '#f97316' : '#a0a0c0' %>">
         <%= @prediction.team1.name %>
         <% if @prediction.predicted_winner == @prediction.team1 %>
-          <span style="font-size: 14px;">★ Predicted winner</span>
+          <div style="font-size: 13px; color: #f97316;">★ Predicted winner</div>
         <% end %>
       </div>
-      <div style="font-size: 36px; font-weight: 900; color: #f97316; margin-top: 8px;">
-        <%= @prediction.team1_pct %>%
-      </div>
+      <div style="font-size: 42px; font-weight: 900; color: #f97316; margin-top: 8px;"><%= @prediction.team1_pct %>%</div>
       <div class="prob-bar">
         <div class="prob-fill" style="width: <%= @prediction.team1_pct %>%; background: #f97316;"></div>
       </div>
     </div>
-    <div style="color: #666; font-weight: 700; font-size: 20px;">VS</div>
+    <div style="color: #555; font-weight: 700; font-size: 20px;">VS</div>
     <div style="text-align: center;">
-      <div style="font-size: 22px; font-weight: 800; color: <%= @prediction.predicted_winner == @prediction.team2 ? '#f97316' : '#a0a0c0' %>">
+      <div style="font-size: 20px; font-weight: 800; color: <%= @prediction.predicted_winner == @prediction.team2 ? '#3b82f6' : '#a0a0c0' %>">
         <%= @prediction.team2.name %>
         <% if @prediction.predicted_winner == @prediction.team2 %>
-          <span style="font-size: 14px;">★ Predicted winner</span>
+          <div style="font-size: 13px; color: #3b82f6;">★ Predicted winner</div>
         <% end %>
       </div>
-      <div style="font-size: 36px; font-weight: 900; color: #3b82f6; margin-top: 8px;">
-        <%= @prediction.team2_pct %>%
-      </div>
+      <div style="font-size: 42px; font-weight: 900; color: #3b82f6; margin-top: 8px;"><%= @prediction.team2_pct %>%</div>
       <div class="prob-bar">
         <div class="prob-fill" style="width: <%= @prediction.team2_pct %>%; background: #3b82f6;"></div>
       </div>
@@ -34,16 +47,17 @@
   </div>
 
   <% if @prediction.venue.present? %>
-    <p style="color: #a0a0c0; text-align: center; margin-bottom: 16px;">📍 <%= @prediction.venue %></p>
+    <p style="color: #a0a0c0; text-align: center; margin-bottom: 20px;">📍 <%= @prediction.venue %></p>
   <% end %>
 
-  <h2>Score Breakdown</h2>
+  <%# ── Factor breakdown ──────────────────────────────────────────── %>
+  <h2>Factor Breakdown</h2>
   <table>
     <thead>
       <tr>
         <th>Factor</th>
-        <th style="color: #f97316;"><%= @prediction.team1.short_name %> contribution (%)</th>
-        <th style="color: #3b82f6;"><%= @prediction.team2.short_name %> contribution (%)</th>
+        <th style="color: #f97316;"><%= @prediction.team1.short_name %> weight (%)</th>
+        <th style="color: #3b82f6;"><%= @prediction.team2.short_name %> weight (%)</th>
       </tr>
     </thead>
     <tbody>
@@ -58,11 +72,36 @@
   </table>
 </div>
 
-<div style="display: flex; gap: 12px; margin-bottom: 12px;">
+<%# ── XI display ─────────────────────────────────────────────────── %>
+<% if @xi_provided %>
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 0;">
+    <% [[@prediction.team1, @prediction.xi_team1_list], [@prediction.team2, @prediction.xi_team2_list]].each do |team, xi| %>
+      <div class="card" style="padding: 16px;">
+        <h3 style="color: #f97316; margin-bottom: 10px;"><%= team.short_name %> XI</h3>
+        <% xi.each_with_index do |player, i| %>
+          <% stats = PlayerStat.where(player_name: player).order(season: :desc).first %>
+          <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #1e1e3a; font-size: 13px;">
+            <span><%= i + 1 %>. <%= player %></span>
+            <span style="color: #a0a0c0;">
+              <% if stats %>
+                <% if stats.balls_faced.to_i > 20 %>SR: <%= stats.strike_rate %><% end %>
+                <% if stats.balls_bowled.to_i > 30 %><% if stats.balls_faced.to_i > 20 %> · <% end %>Eco: <%= stats.economy %><% end %>
+              <% else %>
+                <span style="color: #555;">no data</span>
+              <% end %>
+            </span>
+          </div>
+        <% end %>
+      </div>
+    <% end %>
+  </div>
+<% end %>
+
+<div style="display: flex; gap: 12px; margin: 20px 0 12px;">
   <%= link_to "Predict Another", new_prediction_path, class: "btn btn-primary" %>
   <%= link_to "All Predictions", predictions_path, class: "btn btn-secondary" %>
 </div>
 
 <div class="disclaimer">
-  ⚠️ This prediction is purely statistical and for entertainment purposes. Always gamble responsibly and within your means.
+  ⚠️ Statistical model only. Past performance does not guarantee future results. Always gamble responsibly.
 </div>

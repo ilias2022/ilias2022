@@ -131,4 +131,80 @@ namespace :import do
 
     puts "Done. MatchScores created: #{created}  Matches skipped: #{skipped}  Total: #{MatchScore.count}"
   end
+
+  desc "Aggregate player batting/bowling stats from deliveries CSV. Usage: rails import:player_stats[url]"
+  task :player_stats, [:source] => :environment do |_, args|
+    source = args[:source] ||
+      "https://raw.githubusercontent.com/avinashyadav16/ipl-analytics/main/deliveries_2008-2024.csv"
+
+    puts "Loading deliveries for player stats from: #{source}"
+    raw = source.start_with?("http") ? URI.open(source).read : File.read(source)
+
+    # Build match_id → season lookup
+    season_by_kaggle = Match.where.not(kaggle_match_id: nil).pluck(:kaggle_match_id, :season).to_h
+
+    # Aggregate: { [player, season] => { batting: {...}, bowling: {...} } }
+    batting = Hash.new { |h, k| h[k] = { matches: Set.new, runs: 0, balls: 0 } }
+    bowling = Hash.new { |h, k| h[k] = { matches: Set.new, wickets: 0, runs: 0, balls: 0 } }
+
+    CSV.parse(raw, headers: true, header_converters: ->(h) { h&.strip }) do |row|
+      mid    = row["match_id"].to_i
+      season = season_by_kaggle[mid]
+      next unless season
+
+      batter    = row["batter"]&.strip
+      bowler    = row["bowler"]&.strip
+      b_runs    = row["batsman_runs"].to_i
+      t_runs    = row["total_runs"].to_i
+      is_wicket = row["is_wicket"].to_i
+      # Wide balls don't count as a ball faced by batter but do count for bowler
+      extras_type = row["extras_type"]&.strip
+      is_wide     = extras_type == "wides"
+
+      if batter.present?
+        key = [batter, season]
+        batting[key][:matches] << mid
+        batting[key][:runs]  += b_runs
+        batting[key][:balls] += 1 unless is_wide
+      end
+
+      if bowler.present?
+        key = [bowler, season]
+        bowling[key][:matches] << mid
+        bowling[key][:wickets] += is_wicket
+        bowling[key][:runs]    += t_runs
+        bowling[key][:balls]   += 1 unless is_wide
+      end
+    end
+
+    puts "Saving player stats (#{batting.size} batting entries, #{bowling.size} bowling entries)..."
+
+    all_keys = (batting.keys + bowling.keys).uniq
+    upserted = 0
+
+    all_keys.each do |player, season|
+      bat = batting[[player, season]]
+      bwl = bowling[[player, season]]
+
+      PlayerStat.find_or_initialize_by(player_name: player, season: season).tap do |ps|
+        ps.matches_batted  = bat ? bat[:matches].size : 0
+        ps.total_runs      = bat ? bat[:runs]         : 0
+        ps.balls_faced     = bat ? bat[:balls]        : 0
+        ps.matches_bowled  = bwl ? bwl[:matches].size : 0
+        ps.wickets_taken   = bwl ? bwl[:wickets]      : 0
+        ps.runs_conceded   = bwl ? bwl[:runs]         : 0
+        ps.balls_bowled    = bwl ? bwl[:balls]        : 0
+        ps.save!
+      end
+
+      upserted += 1
+    end
+
+    puts "Done. PlayerStats upserted: #{upserted}  Total: #{PlayerStat.count}"
+  end
+
+  desc "Run all imports in order: matches → deliveries → player_stats"
+  task :all => [:matches, :deliveries, :player_stats] do
+    puts "All imports complete."
+  end
 end

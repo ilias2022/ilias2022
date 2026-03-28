@@ -1,33 +1,47 @@
-# Predicts win probabilities using a weighted combination of eight factors:
+# Predicts win probabilities using a weighted combination of factors.
+#
+# When playing XIs are provided (pre-match mode), xi_batting and xi_bowling
+# features replace the generic match-score batting/bowling strength, giving
+# a more accurate, player-level signal.
 #
 #   Factor              Weight  Description
 #   ──────────────────────────────────────────────────────────────────────
-#   batting_strength      0.20  Rolling avg runs scored vs league avg (last 10)
-#   bowling_strength      0.20  Rolling avg runs conceded vs league avg (last 10)
-#   venue_win_rate        0.20  Team's win rate at this specific venue
-#   head_to_head          0.15  H2H record between these two teams
-#   recent_form           0.10  Last 10 results, exponentially weighted
-#   season_form           0.08  Current-season win rate
-#   toss_advantage        0.07  Toss-to-win correlation at venue (if toss known)
+#   xi_batting          0.20    XI average strike rate vs league avg  (if XI given)
+#   xi_bowling          0.20    XI average economy vs league avg      (if XI given)
+#   batting_strength    0.20    Team rolling runs/innings vs league   (fallback)
+#   bowling_strength    0.20    Team rolling runs conceded vs league  (fallback)
+#   venue_win_rate      0.20    Team's win rate at this specific venue
+#   head_to_head        0.15    H2H record between these two teams
+#   recent_form         0.10    Last 10 results, exponentially weighted
+#   season_form         0.08    Current-season win rate
+#   toss_advantage      0.07    Toss-to-win correlation at venue
 #
-# Falls back gracefully to any subset of features when data is missing.
+# PLAY signal: predicted probability >= PLAY_THRESHOLD (60%)
 class PredictionService
+  PLAY_THRESHOLD = 0.60
+
   WEIGHTS = {
-    batting_strength: 0.20,
-    bowling_strength: 0.20,
     venue_win_rate:   0.20,
     head_to_head:     0.15,
+    batting_strength: 0.175,
+    bowling_strength: 0.175,
     recent_form:      0.10,
     season_form:      0.08,
     toss_advantage:   0.07,
+    xi_batting:       0.0,   # activated when XI provided (replaces batting_strength)
+    xi_bowling:       0.0,   # activated when XI provided (replaces bowling_strength)
   }.freeze
 
+  # xi_team1/xi_team2: array of player name strings from the match team sheet
   # before_date: for backtesting — only uses data before this date
-  def initialize(team1, team2, venue: nil, toss_winner: nil, before_date: nil)
+  def initialize(team1, team2, venue: nil, toss_winner: nil,
+                 xi_team1: [], xi_team2: [], before_date: nil)
     @team1       = team1
     @team2       = team2
     @venue       = venue
     @toss_winner = toss_winner
+    @xi_team1    = Array(xi_team1).map(&:strip).reject(&:empty?)
+    @xi_team2    = Array(xi_team2).map(&:strip).reject(&:empty?)
     @before_date = before_date
   end
 
@@ -54,82 +68,92 @@ class PredictionService
     p
   end
 
+  def play?
+    p = predict
+    [p.team1_win_probability, p.team2_win_probability].max >= PLAY_THRESHOLD
+  end
+
   def breakdown
     factors = raw_factors
     total   = factors[:team1].values.sum + factors[:team2].values.sum
     pct     = ->(v) { total.zero? ? 0 : (v / total * 100).round(1) }
     {
-      team1: factors[:team1].transform_values(&pct),
-      team2: factors[:team2].transform_values(&pct)
+      team1: factors[:team1].reject { |_, v| v.zero? }.transform_values(&pct),
+      team2: factors[:team2].reject { |_, v| v.zero? }.transform_values(&pct)
     }
+  end
+
+  def xi_provided?
+    @xi_team1.any? && @xi_team2.any?
   end
 
   private
 
+  def effective_weights
+    return WEIGHTS unless xi_provided?
+    # Swap generic batting/bowling strength for XI-level versions
+    WEIGHTS.merge(
+      batting_strength: 0.0,
+      bowling_strength: 0.0,
+      xi_batting:       0.175,
+      xi_bowling:       0.175
+    )
+  end
+
   def weighted_scores
-    f  = raw_factors
-    w  = WEIGHTS.values.sum
-    s1 = WEIGHTS.sum { |k, wt| f[:team1][k] * wt } / w
-    s2 = WEIGHTS.sum { |k, wt| f[:team2][k] * wt } / w
+    f   = raw_factors
+    wts = effective_weights
+    w   = wts.values.sum
+    s1  = wts.sum { |k, wt| f[:team1][k] * wt } / w
+    s2  = wts.sum { |k, wt| f[:team2][k] * wt } / w
     [s1, s2]
   end
 
   def raw_factors
     @raw_factors ||= {
-      team1: compute_factors(@team1),
-      team2: compute_factors(@team2),
+      team1: compute_factors(@team1, @xi_team1),
+      team2: compute_factors(@team2, @xi_team2),
     }
   end
 
-  def compute_factors(team)
+  def compute_factors(team, xi)
+    current_season = history.maximum(:season) || Date.today.year
     {
-      batting_strength: batting_strength(team),
-      bowling_strength: bowling_strength(team),
       venue_win_rate:   venue_win_rate(team),
       head_to_head:     h2h_score(team),
+      batting_strength: batting_strength(team),
+      bowling_strength: bowling_strength(team),
       recent_form:      recent_form_score(team),
       season_form:      season_form_score(team),
       toss_advantage:   toss_advantage_score(team),
+      xi_batting:       xi.any? ? PlayerStat.xi_batting_score(xi, current_season: current_season) : 0.0,
+      xi_bowling:       xi.any? ? PlayerStat.xi_bowling_score(xi, current_season: current_season) : 0.0,
     }
   end
 
-  # ─── Strength features (from deliveries data) ───────────────────────────
+  # ─── Match-score strength features ──────────────────────────────────────
 
-  # How does this team's average runs scored compare to the league average?
-  # Returns a 0–1 score where 0.5 = league average.
   def batting_strength(team)
     avg = MatchScore.batting_avg(team, before_date: @before_date)
     return 0.5 unless avg
-
     league = league_batting_avg
     return 0.5 if league.zero?
-
-    # Sigmoid-style normalization: ratio capped to 0.2–0.8 range
-    ratio = avg / league
-    normalized = (ratio - 0.85) / 0.30  # shift so 1.0 ratio → 0.5
-    normalized.clamp(0.1, 0.9)
+    ((avg / league - 0.85) / 0.30).clamp(0.1, 0.9)
   end
 
-  # How good is this team's bowling? Lower runs conceded = higher score.
   def bowling_strength(team)
     avg_conceded = MatchScore.bowling_avg(team, before_date: @before_date)
     return 0.5 unless avg_conceded
-
     league = league_batting_avg
     return 0.5 if league.zero?
-
-    # Invert: conceding fewer runs than average is better
-    ratio = avg_conceded / league
-    normalized = (1.15 - ratio) / 0.30
-    normalized.clamp(0.1, 0.9)
+    ((1.15 - avg_conceded / league) / 0.30).clamp(0.1, 0.9)
   end
 
   def league_batting_avg
     @league_batting_avg ||= begin
       scope = MatchScore.joins(:match)
       scope = scope.where("matches.match_date < ?", @before_date) if @before_date
-      avg   = scope.average(:runs_scored)
-      avg&.to_f || 165.0  # IPL historical average ~165 runs/innings
+      scope.average(:runs_scored)&.to_f || 165.0
     end
   end
 
@@ -148,19 +172,11 @@ class PredictionService
   def recent_form_score(team)
     recent = history
                .where("team1_id = ? OR team2_id = ?", team.id, team.id)
-               .order(match_date: :desc)
-               .limit(10)
+               .order(match_date: :desc).limit(10)
     return 0.5 if recent.empty?
-
-    n             = recent.size.to_f
-    total_weight  = 0.0
-    weighted_wins = 0.0
-    recent.each_with_index do |m, i|
-      w             = n - i
-      total_weight  += w
-      weighted_wins += w if m.winner_id == team.id
-    end
-    weighted_wins / total_weight
+    n, tw, ww = recent.size.to_f, 0.0, 0.0
+    recent.each_with_index { |m, i| tw += (n - i); ww += (n - i) if m.winner_id == team.id }
+    ww / tw
   end
 
   def venue_win_rate(team)
@@ -196,9 +212,7 @@ class PredictionService
 
   # ─── Helpers ────────────────────────────────────────────────────────────
 
-  def opponent(team)
-    team == @team1 ? @team2 : @team1
-  end
+  def opponent(team) = (team == @team1 ? @team2 : @team1)
 
   def history
     @history ||= begin
@@ -215,7 +229,8 @@ class PredictionService
   def venue_keyword
     @venue_keyword ||= begin
       stopwords = %w[cricket stadium ground international]
-      words     = @venue.to_s.split(/[\s,]+/).map(&:downcase).reject { |w| w.length < 4 || stopwords.include?(w) }
+      words     = @venue.to_s.split(/[\s,]+/).map(&:downcase)
+                        .reject { |w| w.length < 4 || stopwords.include?(w) }
       words.first || @venue.to_s
     end
   end

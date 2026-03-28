@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_03_28_092653) do
+ActiveRecord::Schema[8.1].define(version: 2026_03_28_094247) do
   create_table "match_scores", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.integer "match_id", null: false
@@ -41,6 +41,20 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_28_092653) do
     t.index ["winner_id"], name: "index_matches_on_winner_id"
   end
 
+  create_table "player_stats", force: :cascade do |t|
+    t.integer "balls_bowled"
+    t.integer "balls_faced"
+    t.datetime "created_at", null: false
+    t.integer "matches_batted"
+    t.integer "matches_bowled"
+    t.string "player_name", null: false
+    t.integer "runs_conceded"
+    t.integer "season", null: false
+    t.integer "total_runs"
+    t.datetime "updated_at", null: false
+    t.integer "wickets_taken"
+  end
+
   create_table "predictions", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.integer "predicted_winner_id"
@@ -50,6 +64,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_28_092653) do
     t.float "team2_win_probability"
     t.datetime "updated_at", null: false
     t.string "venue"
+    t.text "xi_team1"
+    t.text "xi_team2"
     t.index ["predicted_winner_id"], name: "index_predictions_on_predicted_winner_id"
     t.index ["team1_id"], name: "index_predictions_on_team1_id"
     t.index ["team2_id"], name: "index_predictions_on_team2_id"

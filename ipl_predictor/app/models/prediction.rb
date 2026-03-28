@@ -13,4 +13,20 @@ class Prediction < ApplicationRecord
   def team2_pct
     (team2_win_probability * 100).round(1)
   end
+
+  def confidence
+    [team1_win_probability, team2_win_probability].max
+  end
+
+  def play?
+    confidence >= PredictionService::PLAY_THRESHOLD
+  end
+
+  def xi_team1_list
+    xi_team1.present? ? xi_team1.split("\n").map(&:strip).reject(&:empty?) : []
+  end
+
+  def xi_team2_list
+    xi_team2.present? ? xi_team2.split("\n").map(&:strip).reject(&:empty?) : []
+  end
 end

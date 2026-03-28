@@ -1,7 +1,9 @@
-<h1>Predict Match Outcome</h1>
+<h1>Pre-Match Prediction</h1>
 
 <div class="card">
   <%= form_tag predictions_path, method: :post do %>
+
+    <h2 style="margin-bottom: 16px;">Match</h2>
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
       <div class="form-group">
         <label>Team 1</label>
@@ -15,13 +17,45 @@
       </div>
     </div>
     <div class="form-group">
-      <label>Venue (optional)</label>
+      <label>Venue</label>
       <%= text_field_tag :venue, nil, placeholder: "e.g. Wankhede Stadium, Mumbai" %>
     </div>
-    <%= submit_tag "Predict →", class: "btn btn-primary" %>
+
+    <h2 style="margin: 20px 0 16px;">Toss <span style="font-weight: 400; color: #666; font-size: 14px;">(fill in right after toss)</span></h2>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+      <div class="form-group">
+        <label>Toss Winner</label>
+        <%= select_tag :toss_winner_id, options_from_collection_for_select(@teams, :id, :name),
+            include_blank: "Not known yet" %>
+      </div>
+      <div class="form-group">
+        <label>Toss Decision</label>
+        <%= select_tag :toss_decision, options_for_select([["Bat", "bat"], ["Field", "field"]]),
+            include_blank: "Not known yet" %>
+      </div>
+    </div>
+
+    <h2 style="margin: 20px 0 4px;">Playing XIs <span style="font-weight: 400; color: #666; font-size: 14px;">— optional but boosts accuracy</span></h2>
+    <p style="color: #666; font-size: 13px; margin-bottom: 16px;">One player per line. Use names as they appear in Kaggle data e.g. "V Kohli", "JJ Bumrah", "MS Dhoni".</p>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+      <div class="form-group">
+        <label>Team 1 XI (11 players)</label>
+        <%= text_area_tag :xi_team1, nil, rows: 12,
+            placeholder: "RG Sharma\nJJ Bumrah\nHH Pandya\nTM Head\n...",
+            style: "font-family: monospace; font-size: 13px; resize: vertical;" %>
+      </div>
+      <div class="form-group">
+        <label>Team 2 XI (11 players)</label>
+        <%= text_area_tag :xi_team2, nil, rows: 12,
+            placeholder: "MS Dhoni\nRA Jadeja\nR Ashwin\nRuturaj Gaikwad\n...",
+            style: "font-family: monospace; font-size: 13px; resize: vertical;" %>
+      </div>
+    </div>
+
+    <%= submit_tag "Predict →", class: "btn btn-primary", style: "font-size: 18px; padding: 14px 32px;" %>
   <% end %>
 </div>
 
 <div class="disclaimer">
-  ⚠️ Predictions are based on historical data and statistical models. Gambling involves financial risk — please bet responsibly.
+  ⚠️ For entertainment only. Gambling involves financial risk — always bet responsibly and within your means.
 </div>
