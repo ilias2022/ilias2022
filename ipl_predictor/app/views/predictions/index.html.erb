@@ -1,0 +1,39 @@
+<h1>Recent Predictions</h1>
+
+<% if @predictions.empty? %>
+  <div class="card">
+    <p style="color: #a0a0c0;">No predictions yet. <%= link_to "Make your first prediction →", new_prediction_path, style: "color: #f97316;" %></p>
+  </div>
+<% else %>
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Team 1</th>
+          <th>Team 2</th>
+          <th>Venue</th>
+          <th>Predicted Winner</th>
+          <th>Confidence</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <% @predictions.each do |pred| %>
+          <tr>
+            <td><strong><%= pred.team1.short_name %></strong> <span style="color: #f97316;"><%= pred.team1_pct %>%</span></td>
+            <td><strong><%= pred.team2.short_name %></strong> <span style="color: #3b82f6;"><%= pred.team2_pct %>%</span></td>
+            <td style="color: #a0a0c0;"><%= pred.venue.presence || "—" %></td>
+            <td style="color: #f97316; font-weight: 700;"><%= pred.predicted_winner&.name || "—" %></td>
+            <td>
+              <% confidence = [pred.team1_win_probability, pred.team2_win_probability].max * 100 %>
+              <%= confidence.round(1) %>%
+            </td>
+            <td><%= link_to "View", prediction_path(pred), style: "color: #f97316;" %></td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+<% end %>
+
+<%= link_to "New Prediction", new_prediction_path, class: "btn btn-primary" %>

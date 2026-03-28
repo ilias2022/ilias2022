@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title><%= content_for(:title) || "IPL Predictor" %></title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <%= csrf_meta_tags %>
+    <%= csp_meta_tag %>
+    <%= stylesheet_link_tag :app, "data-turbo-track": "reload" %>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: system-ui, sans-serif; background: #0f0f1a; color: #e8e8f0; min-height: 100vh; }
+      nav { background: #1a1a2e; padding: 12px 24px; display: flex; align-items: center; gap: 24px; border-bottom: 2px solid #f97316; }
+      nav a { color: #f97316; text-decoration: none; font-weight: 600; font-size: 14px; }
+      nav a:hover { color: #fbbf24; }
+      nav .brand { font-size: 18px; font-weight: 800; color: #fff; }
+      .container { max-width: 900px; margin: 0 auto; padding: 32px 16px; }
+      .card { background: #1a1a2e; border-radius: 12px; padding: 24px; margin-bottom: 20px; border: 1px solid #2d2d4e; }
+      h1 { font-size: 28px; font-weight: 800; margin-bottom: 20px; color: #f97316; }
+      h2 { font-size: 20px; font-weight: 700; margin-bottom: 16px; color: #fbbf24; }
+      h3 { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+      .btn { display: inline-block; padding: 10px 20px; border-radius: 8px; font-weight: 700; cursor: pointer; border: none; font-size: 15px; text-decoration: none; }
+      .btn-primary { background: #f97316; color: #fff; }
+      .btn-primary:hover { background: #ea6500; }
+      .btn-secondary { background: #2d2d4e; color: #e8e8f0; }
+      select, input[type=text], input[type=date], input[type=number] { background: #0f0f1a; border: 1px solid #3d3d5e; color: #e8e8f0; padding: 10px 12px; border-radius: 8px; font-size: 15px; width: 100%; }
+      label { display: block; margin-bottom: 6px; font-size: 13px; color: #a0a0c0; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+      .form-group { margin-bottom: 18px; }
+      .alert { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+      .alert-danger { background: #3d1515; border: 1px solid #c0392b; color: #e74c3c; }
+      .alert-success { background: #153d25; border: 1px solid #27ae60; color: #2ecc71; }
+      table { width: 100%; border-collapse: collapse; }
+      th { text-align: left; padding: 10px 12px; font-size: 12px; text-transform: uppercase; color: #a0a0c0; border-bottom: 1px solid #2d2d4e; }
+      td { padding: 10px 12px; border-bottom: 1px solid #1e1e3a; font-size: 14px; }
+      tr:last-child td { border-bottom: none; }
+      .prob-bar { height: 10px; border-radius: 5px; background: #2d2d4e; overflow: hidden; margin-top: 4px; }
+      .prob-fill { height: 100%; border-radius: 5px; }
+      .disclaimer { font-size: 12px; color: #666; border-top: 1px solid #2d2d4e; padding-top: 12px; margin-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <span class="brand">IPL Predictor</span>
+      <%= link_to "Predict", new_prediction_path %>
+      <%= link_to "Predictions", predictions_path %>
+      <%= link_to "Teams", teams_path %>
+      <%= link_to "Matches", matches_path %>
+      <%= link_to "Add Match", new_match_path %>
+    </nav>
+    <div class="container">
+      <% if flash[:notice] %>
+        <div class="alert alert-success"><%= flash[:notice] %></div>
+      <% end %>
+      <% if flash[:alert] %>
+        <div class="alert alert-danger"><%= flash[:alert] %></div>
+      <% end %>
+      <%= yield %>
+    </div>
+  </body>
+</html>

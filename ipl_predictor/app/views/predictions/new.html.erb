@@ -1,0 +1,27 @@
+<h1>Predict Match Outcome</h1>
+
+<div class="card">
+  <%= form_tag predictions_path, method: :post do %>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+      <div class="form-group">
+        <label>Team 1</label>
+        <%= select_tag :team1_id, options_from_collection_for_select(@teams, :id, :name),
+            include_blank: "Select team...", required: true %>
+      </div>
+      <div class="form-group">
+        <label>Team 2</label>
+        <%= select_tag :team2_id, options_from_collection_for_select(@teams, :id, :name),
+            include_blank: "Select team...", required: true %>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Venue (optional)</label>
+      <%= text_field_tag :venue, nil, placeholder: "e.g. Wankhede Stadium, Mumbai" %>
+    </div>
+    <%= submit_tag "Predict →", class: "btn btn-primary" %>
+  <% end %>
+</div>
+
+<div class="disclaimer">
+  ⚠️ Predictions are based on historical data and statistical models. Gambling involves financial risk — please bet responsibly.
+</div>
