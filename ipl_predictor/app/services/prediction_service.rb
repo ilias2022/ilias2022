@@ -1,115 +1,192 @@
-# Predicts win probabilities using a weighted combination of:
-#   1. Overall win rate (historical)
-#   2. Head-to-head record between the two teams
-#   3. Recent form (last 5 matches)
-#   4. Home ground advantage
-#   5. IPL titles (proxy for franchise strength)
+# Predicts win probabilities using a weighted combination of six factors:
+#
+#   Factor              Weight  Description
+#   ──────────────────────────────────────────────────────────────────────
+#   win_rate              0.15  Overall career win rate
+#   head_to_head          0.20  H2H record between these two teams
+#   recent_form           0.20  Last 10 matches (exponentially weighted)
+#   venue_win_rate        0.25  Team's actual record at this specific venue
+#   toss_advantage        0.10  Does toss winner tend to win at this venue?
+#   season_form           0.10  Current-season form (live, updates each match)
+#
+# With the full Kaggle dataset (~900 matches), realistic accuracy: 58–63%.
+# Getting to 70%+ requires player-level form data (deliveries.csv).
 class PredictionService
   WEIGHTS = {
-    win_rate:      0.30,
-    head_to_head:  0.25,
-    recent_form:   0.25,
-    home_advantage: 0.10,
-    titles:        0.10
+    win_rate:       0.15,
+    head_to_head:   0.20,
+    recent_form:    0.20,
+    venue_win_rate: 0.25,
+    toss_advantage: 0.10,
+    season_form:    0.10,
   }.freeze
 
-  def initialize(team1, team2, venue: nil)
-    @team1 = team1
-    @team2 = team2
-    @venue = venue
+  # before_date: for backtesting — only uses data before this date
+  def initialize(team1, team2, venue: nil, toss_winner: nil, before_date: nil)
+    @team1       = team1
+    @team2       = team2
+    @venue       = venue
+    @toss_winner = toss_winner
+    @before_date = before_date
   end
 
   def predict
-    scores = compute_scores
-    total = scores[:team1] + scores[:team2]
-
-    if total.zero?
-      team1_prob = 0.5
-    else
-      team1_prob = scores[:team1] / total
-    end
-
-    team2_prob = 1.0 - team1_prob
-    winner = team1_prob >= team2_prob ? @team1 : @team2
+    s1, s2  = weighted_scores
+    total   = s1 + s2
+    t1_prob = total.zero? ? 0.5 : (s1 / total)
+    t2_prob = 1.0 - t1_prob
+    winner  = t1_prob >= t2_prob ? @team1 : @team2
 
     Prediction.new(
-      team1: @team1,
-      team2: @team2,
-      venue: @venue,
-      team1_win_probability: team1_prob.round(4),
-      team2_win_probability: team2_prob.round(4),
-      predicted_winner: winner
+      team1:                 @team1,
+      team2:                 @team2,
+      venue:                 @venue,
+      team1_win_probability: t1_prob.round(4),
+      team2_win_probability: t2_prob.round(4),
+      predicted_winner:      winner
     )
   end
 
   def predict_and_save
-    prediction = predict
-    prediction.save!
-    prediction
+    p = predict
+    p.save!
+    p
   end
 
   def breakdown
-    scores = raw_scores
-    total_t1 = scores[:team1].values.sum
-    total_t2 = scores[:team2].values.sum
-    total = total_t1 + total_t2
-
+    factors = raw_factors
+    total   = factors[:team1].values.sum + factors[:team2].values.sum
+    pct     = ->(v) { total.zero? ? 0 : (v / total * 100).round(1) }
     {
-      team1: scores[:team1].transform_values { |v| total.zero? ? 0 : (v / total * 100).round(1) },
-      team2: scores[:team2].transform_values { |v| total.zero? ? 0 : (v / total * 100).round(1) }
+      team1: factors[:team1].transform_values(&pct),
+      team2: factors[:team2].transform_values(&pct)
     }
   end
 
   private
 
-  def compute_scores
-    scores = raw_scores
-    { team1: scores[:team1].values.sum, team2: scores[:team2].values.sum }
+  def weighted_scores
+    f  = raw_factors
+    w  = WEIGHTS.values.sum
+    s1 = WEIGHTS.sum { |k, wt| f[:team1][k] * wt } / w
+    s2 = WEIGHTS.sum { |k, wt| f[:team2][k] * wt } / w
+    [s1, s2]
   end
 
-  def raw_scores
-    {
-      team1: {
-        win_rate:       win_rate_score(@team1) * WEIGHTS[:win_rate],
-        head_to_head:   h2h_score(@team1) * WEIGHTS[:head_to_head],
-        recent_form:    @team1.recent_form * WEIGHTS[:recent_form],
-        home_advantage: home_advantage_score(@team1) * WEIGHTS[:home_advantage],
-        titles:         titles_score(@team1) * WEIGHTS[:titles]
-      },
-      team2: {
-        win_rate:       win_rate_score(@team2) * WEIGHTS[:win_rate],
-        head_to_head:   h2h_score(@team2) * WEIGHTS[:head_to_head],
-        recent_form:    @team2.recent_form * WEIGHTS[:recent_form],
-        home_advantage: home_advantage_score(@team2) * WEIGHTS[:home_advantage],
-        titles:         titles_score(@team2) * WEIGHTS[:titles]
-      }
+  def raw_factors
+    @raw_factors ||= {
+      team1: compute_factors(@team1),
+      team2: compute_factors(@team2),
     }
   end
 
-  def win_rate_score(team)
-    team.total_matches.zero? ? 0.5 : team.win_rate
+  def compute_factors(team)
+    {
+      win_rate:       overall_win_rate(team),
+      head_to_head:   h2h_score(team),
+      recent_form:    recent_form_score(team),
+      venue_win_rate: venue_win_rate(team),
+      toss_advantage: toss_advantage_score(team),
+      season_form:    season_form_score(team),
+    }
+  end
+
+  # ─── Factor computations ────────────────────────────────────────────────
+
+  def overall_win_rate(team)
+    played = history.where("team1_id = ? OR team2_id = ?", team.id, team.id).count
+    return 0.5 if played.zero?
+    history.where(winner: team).count.to_f / played
   end
 
   def h2h_score(team)
-    other = team == @team1 ? @team2 : @team1
-    t1_wins = @team1.head_to_head_wins(@team2)
-    t2_wins = @team2.head_to_head_wins(@team1)
-    total = t1_wins + t2_wins
-
-    return 0.5 if total.zero?
-    team == @team1 ? t1_wins.to_f / total : t2_wins.to_f / total
+    other = opponent(team)
+    h2h   = history.where(
+      "(team1_id = ? AND team2_id = ?) OR (team1_id = ? AND team2_id = ?)",
+      team.id, other.id, other.id, team.id
+    )
+    return 0.5 if h2h.empty?
+    h2h.where(winner: team).count.to_f / h2h.count
   end
 
-  def home_advantage_score(team)
+  # Exponentially weighted recent form — most recent match has highest weight
+  def recent_form_score(team)
+    recent = history
+               .where("team1_id = ? OR team2_id = ?", team.id, team.id)
+               .order(match_date: :desc)
+               .limit(10)
+    return 0.5 if recent.empty?
+
+    n             = recent.size.to_f
+    total_weight  = 0.0
+    weighted_wins = 0.0
+    recent.each_with_index do |m, i|
+      w             = n - i  # most recent = n, oldest = 1
+      total_weight  += w
+      weighted_wins += w if m.winner_id == team.id
+    end
+    weighted_wins / total_weight
+  end
+
+  # Team's actual win rate at this specific venue
+  def venue_win_rate(team)
     return 0.5 if @venue.blank?
-    team.home_ground.present? && @venue.downcase.include?(team.home_ground.downcase) ? 1.0 : 0.5
+    vm = venue_matches.where("team1_id = ? OR team2_id = ?", team.id, team.id)
+    return 0.5 if vm.empty?
+    vm.where(winner: team).count.to_f / vm.count
   end
 
-  def titles_score(team)
-    max_titles = Team.maximum(:titles).to_f
-    return 0.5 if max_titles.zero?
-    # Normalize: more titles = stronger franchise, but cap influence
-    base = 0.5 + (team.titles.to_f / max_titles) * 0.5
-    base
+  # If toss winner known: use venue toss-to-win rate; otherwise neutral
+  def toss_advantage_score(team)
+    return 0.5 if @toss_winner.nil?
+    rate = toss_to_win_rate
+    @toss_winner == team ? rate : (1.0 - rate)
+  end
+
+  # Fraction of matches at this venue won by the toss winner
+  def toss_to_win_rate
+    @toss_to_win_rate ||= begin
+      return 0.5 if @venue.blank?
+      vm = venue_matches.where.not(toss_winner_id: nil, winner_id: nil)
+      return 0.5 if vm.empty?
+      vm.where("toss_winner_id = winner_id").count.to_f / vm.count
+    end
+  end
+
+  # Win rate in the most recent completed season
+  def season_form_score(team)
+    current = history.maximum(:season)
+    return 0.5 unless current
+    sm = history.where(season: current)
+                .where("team1_id = ? OR team2_id = ?", team.id, team.id)
+    return 0.5 if sm.empty?
+    sm.where(winner: team).count.to_f / sm.count
+  end
+
+  # ─── Helpers ────────────────────────────────────────────────────────────
+
+  def opponent(team)
+    team == @team1 ? @team2 : @team1
+  end
+
+  def history
+    @history ||= begin
+      scope = Match.completed
+      scope = scope.where("match_date < ?", @before_date) if @before_date
+      scope
+    end
+  end
+
+  def venue_matches
+    @venue_matches ||= history.where("venue LIKE ?", "%#{venue_keyword}%")
+  end
+
+  # Pick the most distinctive word from the venue name for fuzzy matching
+  def venue_keyword
+    @venue_keyword ||= begin
+      stopwords = %w[cricket stadium ground international]
+      words     = @venue.to_s.split(/[\s,]+/).map(&:downcase).reject { |w| w.length < 4 || stopwords.include?(w) }
+      words.first || @venue.to_s
+    end
   end
 end
