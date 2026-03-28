@@ -38,5 +38,8 @@ module IplPredictor
 
     # Don't generate system test files.
     config.generators.system_tests = nil
+
+    # Mount at /ipl subpath in production (override with RAILS_RELATIVE_URL_ROOT env var)
+    config.relative_url_root = ENV.fetch("RAILS_RELATIVE_URL_ROOT", "/ipl")
   end
 end
